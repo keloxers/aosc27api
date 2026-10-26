@@ -3,6 +3,7 @@ package wee
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -62,17 +63,26 @@ func (c *Cobros) datosWeeDistrito(ctx context.Context, inm *facturacion.Inmueble
 	return pt.String, ak.String, err
 }
 
-func (c *Cobros) externalReferenceUnico(ctx context.Context) (string, error) {
-	for {
+// ejecutor lo cumplen *sql.DB y *sql.Tx: permite escribir dentro de una transacción.
+type ejecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// externalReferenceUnico busca una referencia libre; con cota para no girar
+// para siempre si la base responde algo raro.
+func (c *Cobros) externalReferenceUnico(ctx context.Context, ex ejecutor) (string, error) {
+	for i := 0; i < 20; i++ {
 		code := CodigoAleatorio(10)
 		var n int
-		if err := c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM payment_intent WHERE external_id = ?", code).Scan(&n); err != nil {
+		if err := ex.QueryRowContext(ctx, "SELECT COUNT(*) FROM payment_intent WHERE external_id = ?", code).Scan(&n); err != nil {
 			return "", err
 		}
 		if n == 0 {
 			return code, nil
 		}
 	}
+	return "", fmt.Errorf("no se pudo generar una referencia externa única")
 }
 
 func (c *Cobros) log(ctx context.Context, userID int64, texto string) {
@@ -90,9 +100,27 @@ type Pagador struct {
 	Email  string
 }
 
+// itemCobro es una factura ya calculada, lista para escribir y mandar a Wee.
+type itemCobro struct {
+	m           *facturacion.Movimiento
+	final       float64
+	intereses   float64
+	descuentos  float64
+	centavos    int64
+	vencimiento sql.NullTime
+}
+
+// maxFacturas acota cuántas facturas se pagan en un solo checkout.
+const maxFacturas = 50
+
 // CrearCheckout arma el recibo y sus detalles para las facturas elegidas y
 // crea el checkout en Wee (WeeCheckoutService::crear).
 func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoIDs []int64, esAdmin bool) (*ResultadoCheckout, error) {
+	// Antes de tocar la base: con el cobro apagado no se deja ni un recibo.
+	if !c.habilitado {
+		return nil, &ErrCheckout{"El cobro online no está disponible en este momento."}
+	}
+
 	movimientos, inm, err := c.resolverMovimientos(ctx, pagador.ID, movimientoIDs, esAdmin)
 	if err != nil {
 		return nil, err
@@ -117,7 +145,8 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 	if err != nil {
 		return nil, err
 	}
-	if endpoint == nil || userWee == nil {
+	if endpoint == nil || userWee == nil || !endpoint.Texto.Valid || endpoint.Texto.String == "" ||
+		!userWee.Numero.Valid || userWee.Numero.Int64 <= 0 {
 		return nil, fmt.Errorf("faltan las configuraciones wee_endpoint / wee_user_id")
 	}
 
@@ -125,12 +154,10 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 	hoy := calc.Hoy()
 	ahora := calc.Ahora.Format("2006-01-02 15:04:05")
 
-	reciboID, err := c.crearCajasrecibo(ctx, pagador.ID, userWee.Numero.Int64, hoy, ahora)
-	if err != nil {
-		return nil, err
-	}
-
+	// Se calcula todo en memoria antes de escribir: si algo falla o no hay
+	// importe, no queda ningún recibo a medias.
 	var total int64
+	calculos := make([]itemCobro, 0, len(movimientos))
 	items := []Item{}
 	for _, m := range movimientos {
 		final, err := calc.ImporteFinal(m)
@@ -147,13 +174,10 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 		}
 
 		centavos := facturacion.Centavos(final)
+		if centavos <= 0 {
+			return nil, &ErrCheckout{"Hay facturas sin importe a pagar."}
+		}
 		total += centavos
-		items = append(items, Item{
-			Quantity:    1,
-			Description: m.Movimiento.String,
-			Identifier:  fmt.Sprintf("%05d", m.ID),
-			Amount:      centavos,
-		})
 
 		// Vencido el primero, se cobra con el segundo vencimiento
 		// (strtotime(fecha) < time() en PHP, por eso el mismo día ya cuenta).
@@ -162,41 +186,29 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 			vencimiento = m.Fecha2doVencimiento
 		}
 
-		if _, err := c.db.ExecContext(ctx, `
-			INSERT INTO cajasrecibosdetalles (cajasrecibos_id, movimientos_id, fecha_vencimiento, periodo_mes,
-				periodo_anio, cajasrecibosdetalle, consumo, importe_apagar, importe_interes, importe_descuento,
-				importe_pagado, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-			reciboID, m.ID, fechaONull(vencimiento), m.PeriodoMes, m.PeriodoAnio, m.Movimiento, m.Consumo,
-			final, intereses, descuentos, ahora, ahora); err != nil {
-			return nil, err
-		}
+		calculos = append(calculos, itemCobro{m, final, intereses, descuentos, centavos, vencimiento})
+		items = append(items, Item{
+			Quantity:    1,
+			Description: m.Movimiento.String,
+			Identifier:  fmt.Sprintf("%05d", m.ID),
+			Amount:      centavos,
+		})
+	}
+	if total <= 0 {
+		return nil, &ErrCheckout{"Hay facturas sin importe a pagar."}
 	}
 
-	if _, err := c.db.ExecContext(ctx, "UPDATE cajasrecibos SET importe = ?, updated_at = ? WHERE id = ?",
-		float64(total)/100, ahora, reciboID); err != nil {
-		return nil, err
-	}
-
-	ref, err := c.externalReferenceUnico(ctx)
+	reciboID, ref, err := c.registrarCheckout(ctx, pagador.ID, userWee.Numero.Int64, hoy, ahora, total, calculos)
 	if err != nil {
 		return nil, err
 	}
 
-	anular := func(causa error) error {
-		if _, err := c.db.ExecContext(ctx, "UPDATE cajasrecibos SET estado = 'anulada', updated_at = ? WHERE id = ?",
-			time.Now().UTC().Format("2006-01-02 15:04:05"), reciboID); err != nil {
-			slog.Error("no se pudo anular el recibo", "cajasrecibos_id", reciboID, "error", err)
-		}
-		c.log(ctx, 1, "Checkout error: "+causa.Error())
-		return &ErrCheckout{"No se pudo iniciar el pago, intenta de nuevo más tarde."}
-	}
+	// Si el cliente móvil corta la conexión, la escritura posterior a Wee no
+	// se debe perder: el pago puede haberse creado igual.
+	ctxW, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 
-	if !c.habilitado {
-		return nil, anular(fmt.Errorf("Wee deshabilitado (WEE_HABILITADO=false)"))
-	}
-
-	uuid, checkoutURL, err := c.cliente.Checkout(ctx, endpoint.Texto.String, apikey, Pedido{
+	uuid, checkoutURL, err := c.cliente.Checkout(ctxW, endpoint.Texto.String, apikey, Pedido{
 		PayerName:         pagador.Nombre,
 		Description:       c.descripcion,
 		FirstTotal:        total,
@@ -207,23 +219,121 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 		Items:             items,
 	})
 	if err != nil {
-		return nil, anular(err)
+		ahoraW := time.Now().UTC().Format("2006-01-02 15:04:05")
+		if _, e := c.db.ExecContext(ctxW, "UPDATE cajasrecibos SET estado = 'anulada', updated_at = ? WHERE id = ?",
+			ahoraW, reciboID); e != nil {
+			slog.Error("no se pudo anular el recibo", "cajasrecibos_id", reciboID, "error", e)
+		}
+		if _, e := c.db.ExecContext(ctxW, "UPDATE payment_intent SET transaccion = 'rechazado', estado = 'error', updated_at = ? WHERE external_id = ?",
+			ahoraW, ref); e != nil {
+			slog.Error("no se pudo marcar el payment_intent como error", "external_id", ref, "error", e)
+		}
+		c.log(ctxW, 1, "Checkout error: "+err.Error())
+		return nil, &ErrCheckout{"No se pudo iniciar el pago, intenta de nuevo más tarde."}
 	}
 
-	if _, err := c.db.ExecContext(ctx, `
-		INSERT INTO payment_intent (payment_id, external_id, cajasrecibos_id, estado, transaccion,
-			importe_pagado, checkout_url, created_at, updated_at)
-		VALUES (?, ?, ?, 'pagando', 'pendiente', ?, ?, ?, ?)`,
-		uuid, ref, reciboID, fmt.Sprint(total), checkoutURL, ahora, ahora); err != nil {
-		return nil, anular(err)
+	if _, err := c.db.ExecContext(ctxW, "UPDATE payment_intent SET payment_id = ?, checkout_url = ?, updated_at = ? WHERE external_id = ?",
+		uuid, checkoutURL, time.Now().UTC().Format("2006-01-02 15:04:05"), ref); err != nil {
+		// Wee ya creó el checkout: se devuelve igual (el webhook encuentra el
+		// pago por external_id). Nunca se loguea la apikey.
+		slog.Error("no se pudo guardar el checkout de Wee", "external_id", ref, "uuid", uuid,
+			"checkout_url", checkoutURL, "error", err)
 	}
 
 	return &ResultadoCheckout{CheckoutURL: checkoutURL, ExternalReference: ref, CajasreciboID: reciboID}, nil
 }
 
+// registrarCheckout escribe planilla, recibo, detalles y payment_intent en una
+// sola transacción. Toma el lock 'wee-planilla' (compartido con Laravel, que
+// también crea planillas del usuario Wee) en una conexión dedicada.
+func (c *Cobros) registrarCheckout(ctx context.Context, userID, userCaja int64, hoy, ahora string, total int64, calculos []itemCobro) (reciboID int64, ref string, err error) {
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return 0, "", err
+	}
+	// El lock vive en la conexión: si no se pudo soltar, se descarta la
+	// conexión en vez de devolverla al pool con el lock tomado.
+	bloqueado := false
+	defer func() {
+		if bloqueado {
+			ctxL, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if _, e := conn.ExecContext(ctxL, "SELECT RELEASE_LOCK('wee-planilla')"); e != nil {
+				slog.Error("no se pudo soltar el lock wee-planilla", "error", e)
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
+		}
+		conn.Close()
+	}()
+
+	var got sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK('wee-planilla', 10)").Scan(&got); err != nil {
+		return 0, "", err
+	}
+	if !got.Valid || got.Int64 != 1 {
+		return 0, "", fmt.Errorf("no se pudo obtener el lock wee-planilla")
+	}
+	bloqueado = true
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	commiteado := false
+	defer func() {
+		if !commiteado {
+			tx.Rollback()
+		}
+	}()
+
+	reciboID, err = c.crearCajasrecibo(ctx, tx, userID, userCaja, hoy, ahora)
+	if err != nil {
+		return 0, "", err
+	}
+
+	for _, it := range calculos {
+		m := it.m
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO cajasrecibosdetalles (cajasrecibos_id, movimientos_id, fecha_vencimiento, periodo_mes,
+				periodo_anio, cajasrecibosdetalle, consumo, importe_apagar, importe_interes, importe_descuento,
+				importe_pagado, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+			reciboID, m.ID, fechaONull(it.vencimiento), m.PeriodoMes, m.PeriodoAnio, m.Movimiento, m.Consumo,
+			it.final, it.intereses, it.descuentos, ahora, ahora); err != nil {
+			return 0, "", err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, "UPDATE cajasrecibos SET importe = ?, updated_at = ? WHERE id = ?",
+		float64(total)/100, ahora, reciboID); err != nil {
+		return 0, "", err
+	}
+
+	ref, err = c.externalReferenceUnico(ctx, tx)
+	if err != nil {
+		return 0, "", err
+	}
+
+	// payment_id se completa cuando Wee responde.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO payment_intent (payment_id, external_id, cajasrecibos_id, estado, transaccion,
+			importe_pagado, checkout_url, created_at, updated_at)
+		VALUES (NULL, ?, ?, 'pagando', 'pendiente', ?, NULL, ?, ?)`,
+		ref, reciboID, fmt.Sprint(total), ahora, ahora); err != nil {
+		return 0, "", err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, "", err
+	}
+	commiteado = true
+	return reciboID, ref, nil
+}
+
 // resolverMovimientos devuelve las facturas impagas elegidas (de las cuentas
 // del usuario, salvo admin) y el inmueble de la primera. A diferencia de
 // Laravel, los ids inválidos se ignoran en lugar de cortar con error 500.
+// Todas deben ser del mismo distrito: se cobra con la apikey de uno solo.
 func (c *Cobros) resolverMovimientos(ctx context.Context, userID int64, ids []int64, esAdmin bool) ([]*facturacion.Movimiento, *facturacion.Inmueble, error) {
 	var permitidos map[int64]bool
 	if !esAdmin {
@@ -240,16 +350,17 @@ func (c *Cobros) resolverMovimientos(ctx context.Context, userID int64, ids []in
 	var movimientos []*facturacion.Movimiento
 	var inm *facturacion.Inmueble
 	vistos := map[int64]bool{}
+	inmuebles := map[int64]*facturacion.Inmueble{}
 	for _, id := range ids {
 		if vistos[id] {
 			continue
 		}
 		vistos[id] = true
+		if len(vistos) > maxFacturas {
+			return nil, nil, &ErrCheckout{"Podés pagar hasta 50 facturas por vez."}
+		}
 
-		// Pagado = importe_pagado > 0 (con descuento queda por debajo de importe_apagar y se
-		// volvía a cobrar).
-		lista, err := facturacion.ListarMovimientos(ctx, c.db,
-			"id = ? AND (importe_pagado <= 0 OR importe_pagado IS NULL)", id)
+		lista, err := facturacion.ListarMovimientos(ctx, c.db, "id = ? AND "+facturacion.CondicionPendiente, id)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -260,30 +371,45 @@ func (c *Cobros) resolverMovimientos(ctx context.Context, userID int64, ids []in
 		if !esAdmin && (!m.InmueblesID.Valid || !permitidos[m.InmueblesID.Int64]) {
 			continue
 		}
-		movimientos = append(movimientos, m)
 
-		if inm == nil && m.InmueblesID.Valid {
-			if inm, err = facturacion.BuscarInmueble(ctx, c.db, m.InmueblesID.Int64); err != nil {
+		// Sin inmueble no hay distrito (ni apikey) con que cobrarla.
+		if !m.InmueblesID.Valid {
+			continue
+		}
+		invM, ok := inmuebles[m.InmueblesID.Int64]
+		if !ok {
+			if invM, err = facturacion.BuscarInmueble(ctx, c.db, m.InmueblesID.Int64); err != nil {
 				return nil, nil, err
 			}
+			inmuebles[m.InmueblesID.Int64] = invM
 		}
+		if invM == nil {
+			continue
+		}
+		if inm == nil {
+			inm = invM
+		}
+		if invM.DistritosID != inm.DistritosID {
+			return nil, nil, &ErrCheckout{"Las facturas de distintos distritos se pagan por separado."}
+		}
+		movimientos = append(movimientos, m)
 	}
 	return movimientos, inm, nil
 }
 
 // crearCajasrecibo usa la planilla abierta de hoy del usuario de caja de Wee
 // (cerrando las de días anteriores) y le agrega un recibo.
-func (c *Cobros) crearCajasrecibo(ctx context.Context, userID, userCaja int64, hoy, ahora string) (int64, error) {
+func (c *Cobros) crearCajasrecibo(ctx context.Context, ex ejecutor, userID, userCaja int64, hoy, ahora string) (int64, error) {
 	var planillaID int64
-	err := c.db.QueryRowContext(ctx, `
+	err := ex.QueryRowContext(ctx, `
 		SELECT id FROM cajasplanillas WHERE users_id = ? AND fecha = ? AND estado = 'abierta' ORDER BY id LIMIT 1`,
 		userCaja, hoy).Scan(&planillaID)
 	if errors.Is(err, sql.ErrNoRows) {
-		if _, err := c.db.ExecContext(ctx, "UPDATE cajasplanillas SET estado = 'cerrada', updated_at = ? WHERE users_id = ? AND estado = 'abierta'",
+		if _, err := ex.ExecContext(ctx, "UPDATE cajasplanillas SET estado = 'cerrada', updated_at = ? WHERE users_id = ? AND estado = 'abierta'",
 			ahora, userCaja); err != nil {
 			return 0, err
 		}
-		res, err := c.db.ExecContext(ctx, `
+		res, err := ex.ExecContext(ctx, `
 			INSERT INTO cajasplanillas (users_id, fecha, estado, created_at, updated_at) VALUES (?, ?, 'abierta', ?, ?)`,
 			userCaja, hoy, ahora, ahora)
 		if err != nil {
@@ -296,7 +422,7 @@ func (c *Cobros) crearCajasrecibo(ctx context.Context, userID, userCaja int64, h
 		return 0, err
 	}
 
-	res, err := c.db.ExecContext(ctx, `
+	res, err := ex.ExecContext(ctx, `
 		INSERT INTO cajasrecibos (cajasplanillas_id, users_id, fecha, estado, created_at, updated_at)
 		VALUES (?, ?, ?, 'cerrada', ?, ?)`, planillaID, userID, hoy, ahora, ahora)
 	if err != nil {
@@ -339,16 +465,46 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 	if err != nil {
 		return falla(err)
 	}
+	// Distrito sin Wee configurado: no hay QR, sin ruido en el log.
+	if paymentType == "" || apikey == "" {
+		return "", "", false
+	}
 	endpoint, err := c.configuracion(ctx, "wee_endpoint_qr")
-	if err != nil || endpoint == nil {
+	if err != nil || endpoint == nil || !endpoint.Texto.Valid || endpoint.Texto.String == "" {
 		return falla(fmt.Errorf("falta la configuración wee_endpoint_qr"))
 	}
-	ref, err := c.externalReferenceUnico(ctx)
+
+	// Cada render del PDF creaba un QR nuevo y pagar dos QR de la misma factura
+	// termina en pago duplicado: se reusa el vigente si sigue pendiente y por
+	// el mismo importe.
+	// El último intent del movimiento: el webhook le cambia `estado` al de Wee, así que
+	// solo se reusa si sigue intacto ('qr', pendiente) y es el de qr_pago.
+	var estadoIntent, transaccion, importeIntent sql.NullString
+	err = c.db.QueryRowContext(ctx,
+		"SELECT estado, transaccion, importe_pagado FROM payment_intent WHERE movimientos_id = ? ORDER BY id DESC LIMIT 1", m.ID).
+		Scan(&estadoIntent, &transaccion, &importeIntent)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return falla(err)
+	}
+	if err == nil && estadoIntent.String == "qr" && transaccion.String == "pendiente" && importeIntent.String == fmt.Sprint(total) {
+		var qrPago, qrCheckout sql.NullString
+		if err := c.db.QueryRowContext(ctx, "SELECT qr_pago, qr_checkout FROM movimientos WHERE id = ?", m.ID).
+			Scan(&qrPago, &qrCheckout); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return falla(err)
+		} else if err == nil && qrPago.String != "" && qrCheckout.String != "" {
+			return qrPago.String, qrCheckout.String, true
+		}
+	}
+
+	ref, err := c.externalReferenceUnico(ctx, c.db)
 	if err != nil {
 		return falla(err)
 	}
 
-	uuid, urlQR, checkoutURL, err := c.cliente.QRFactura(ctx, endpoint.Texto.String, apikey, Pedido{
+	// El PDF espera esta llamada: timeout corto.
+	ctxQ, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	uuid, urlQR, checkoutURL, err := c.cliente.QRFactura(ctxQ, endpoint.Texto.String, apikey, Pedido{
 		PayerName:         titular.Nombre,
 		Description:       c.descripcion,
 		FirstTotal:        total,
@@ -380,6 +536,20 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 		return falla(err)
 	}
 	return urlQR, checkoutURL, true
+}
+
+// Resultado resume estado/transaccion de un payment_intent para la app:
+// pagado, duplicado, fallido o pendiente.
+func Resultado(estado, transaccion sql.NullString) string {
+	switch {
+	case transaccion.String == "completado":
+		return "pagado"
+	case estado.String == "DUPLICADO":
+		return "duplicado"
+	case transaccion.String == "rechazado":
+		return "fallido"
+	}
+	return "pendiente"
 }
 
 func fechaONull(t sql.NullTime) any {

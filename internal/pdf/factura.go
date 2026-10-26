@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"path"
@@ -436,12 +437,14 @@ func (g *Generador) Generar(ctx context.Context, m *facturacion.Movimiento) ([]b
 		pagador = &wee.Pagador{ID: tit.ID, Nombre: tit.Nombre, Email: tit.Email}
 	}
 	if urlQR, checkoutURL, ok := g.cobros.QR(ctx, calc, m, inm, pagador); ok {
+		// El PDF no debe fallar por el QR: sin QR ni sus textos.
 		if err := d.qr(urlQR, 86, 255, 40); err != nil {
-			return nil, err
+			slog.Warn("no se pudo dibujar el QR de pago", "movimientos_id", m.ID, "error", err)
+		} else {
+			d.negrita(7)
+			d.texto(87.5, 254.5, "QR valido hasta el "+fechaOEpoch(m.Fecha1erVencimiento))
+			d.texto(60, 292.5, checkoutURL)
 		}
-		d.negrita(7)
-		d.texto(87.5, 254.5, "QR valido hasta el "+fechaOEpoch(m.Fecha1erVencimiento))
-		d.texto(60, 292.5, checkoutURL)
 	}
 
 	return d.salida()

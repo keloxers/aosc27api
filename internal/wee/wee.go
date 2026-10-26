@@ -39,7 +39,11 @@ type Cliente struct {
 }
 
 func NuevoCliente() *Cliente {
-	return &Cliente{http: &http.Client{Timeout: 30 * time.Second}}
+	return &Cliente{http: &http.Client{
+		Timeout: 30 * time.Second,
+		// No seguir redirecciones: reenviaría el header apiKey a otro host.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 }
 
 // Checkout crea un checkout y devuelve su uuid y la URL de pago.
@@ -71,8 +75,8 @@ func (c *Cliente) QRFactura(ctx context.Context, endpoint, apikey string, p Pedi
 	if err := c.post(ctx, endpoint+"/checkout/qr-factura", apikey, []Pedido{p}, &r); err != nil {
 		return "", "", "", err
 	}
-	if len(r.Data) == 0 {
-		return "", "", "", fmt.Errorf("respuesta de Wee sin datos de QR")
+	if len(r.Data) == 0 || r.Data[0].UUID == "" || r.Data[0].URLQR == "" || r.Data[0].CheckoutURL == "" {
+		return "", "", "", fmt.Errorf("respuesta de Wee sin uuid/url_qr/checkout_url")
 	}
 	return r.Data[0].UUID, r.Data[0].URLQR, r.Data[0].CheckoutURL, nil
 }
@@ -96,7 +100,11 @@ func (c *Cliente) post(ctx context.Context, url, apikey string, cuerpo, destino 
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= 300 {
+		// Truncado: el body va al log y no debe crecer sin límite.
+		if len(body) > 300 {
+			body = body[:300]
+		}
 		return fmt.Errorf("Wee respondió %d: %s", resp.StatusCode, body)
 	}
 	return json.Unmarshal(body, destino)

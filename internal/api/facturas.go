@@ -273,6 +273,8 @@ func (s *Servidor) checkout(w http.ResponseWriter, r *http.Request) {
 		errs.agregar("movimiento_ids", "El campo movimiento ids es obligatorio.")
 	case !esLista:
 		errs.agregar("movimiento_ids", "El campo movimiento ids debe ser un conjunto.")
+	case len(lista) > 50:
+		errs.agregar("movimiento_ids", "Podés pagar hasta 50 facturas por vez.")
 	default:
 		for i, v := range lista {
 			id, ok := entero(v)
@@ -339,6 +341,7 @@ func (s *Servidor) checkoutStatus(w http.ResponseWriter, r *http.Request) {
 	responderJSON(w, http.StatusOK, map[string]any{
 		"estado":      nulo(estado),
 		"transaccion": nulo(transaccion),
+		"resultado":   wee.Resultado(estado, transaccion),
 	})
 }
 
