@@ -4,6 +4,10 @@ API en Go para **aosc_app**, independiente de aosc_front. Expone `/api/v1` con
 el mismo contrato JSON que la API Sanctum de aosc_front (`routes/api.php`) y
 trabaja sobre la misma base `aosc`.
 
+Sirve dos instancias con el mismo código, elegidas con `INSTANCIA`: `aosc` y
+`covesa` (COVESA Ituzaingó: base `covesa`, coordenadas propias de la factura,
+sin push). Producción: ver [`deploy/README.md`](deploy/README.md).
+
 | Endpoint | Equivale a |
 |---|---|
 | `POST /register`, `/login`, `/logout`, `GET /me` | `Api\AuthController` |
@@ -54,8 +58,8 @@ go run ./cmd/aosc-api notificaciones -simular [-regla N]
 
 ## Pasos para el corte
 
-1. `docker compose up -d --build` en el servidor, con `.env` y
-   `firebase-credentials.json`, y `NOTIFICACIONES_HABILITADAS=false`.
+1. `deploy/docker-compose.yml` en Vi-App-A (ver `deploy/README.md`), con
+   `NOTIFICACIONES_HABILITADAS=false`.
 2. Probar contra el contenedor (`/up` y un login).
 3. En el proxy, rutear `aosc.gob.ar/api/v1/*` al contenedor. La app no
    necesita una versión nueva porque su base URL ya es

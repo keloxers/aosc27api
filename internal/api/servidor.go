@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aosc_api/internal/auth"
+	"aosc_api/internal/instancia"
 	"aosc_api/internal/mail"
 	"aosc_api/internal/pdf"
 	"aosc_api/internal/wee"
@@ -21,9 +22,10 @@ type Servidor struct {
 	mailer    *mail.Mailer
 	cobros    *wee.Cobros
 	pdf       *pdf.Generador
+	perfil    *instancia.Perfil
 }
 
-func NuevoServidor(db *sql.DB, a *auth.Servicio, m *mail.Mailer, c *wee.Cobros, p *pdf.Generador) *Servidor {
+func NuevoServidor(db *sql.DB, a *auth.Servicio, m *mail.Mailer, c *wee.Cobros, p *pdf.Generador, perfil *instancia.Perfil) *Servidor {
 	return &Servidor{
 		db:        db,
 		auth:      a,
@@ -31,6 +33,7 @@ func NuevoServidor(db *sql.DB, a *auth.Servicio, m *mail.Mailer, c *wee.Cobros, 
 		mailer:    m,
 		cobros:    c,
 		pdf:       p,
+		perfil:    perfil,
 	}
 }
 

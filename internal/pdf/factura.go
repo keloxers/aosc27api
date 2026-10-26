@@ -22,6 +22,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"aosc_api/internal/facturacion"
+	"aosc_api/internal/instancia"
 	"aosc_api/internal/wee"
 )
 
@@ -29,17 +30,19 @@ type Generador struct {
 	db          *sql.DB
 	cobros      *wee.Cobros
 	archivosURL string
+	perfil      *instancia.Perfil
 	http        *http.Client
 
 	mu        sync.Mutex
 	plantilla map[string][]byte
 }
 
-func NuevoGenerador(db *sql.DB, cobros *wee.Cobros, archivosURL string) *Generador {
+func NuevoGenerador(db *sql.DB, cobros *wee.Cobros, archivosURL string, perfil *instancia.Perfil) *Generador {
 	return &Generador{
 		db:          db,
 		cobros:      cobros,
 		archivosURL: archivosURL,
+		perfil:      perfil,
 		http:        &http.Client{Timeout: 20 * time.Second},
 		plantilla:   map[string][]byte{},
 	}
@@ -257,51 +260,53 @@ func (g *Generador) Generar(ctx context.Context, m *facturacion.Movimiento) ([]b
 		d.imagen(plantilla, img)
 	}
 
+	pf := g.perfil.Factura
+
 	d.tamano(10)
 	if inm.CodigoCodex.String != "" {
 		d.texto(96, 49, "CODIGO: "+inm.CodigoCodex.String)
 	}
 	if verdadero(inm.Cuenta.String) {
-		d.texto(120, 54.5, inm.Cuenta.String)
+		d.texto(pf.Cuenta.X, pf.Cuenta.Y, inm.Cuenta.String)
 	}
 	if tit != nil {
-		d.texto(117, 61, tit.Nombre)
-		d.texto(134, 68, tit.IvaTipo.String)
+		d.texto(pf.Usuario.X, pf.Usuario.Y, tit.Nombre)
+		d.texto(pf.Iva.X, pf.Iva.Y, tit.IvaTipo.String)
 		if verdadero(tit.Cuit) {
-			d.texto(117, 80, tit.Cuit)
+			d.texto(pf.Cuit.X, pf.Cuit.Y, tit.Cuit)
 		}
 	}
 	d.tamano(8)
-	d.texto(120, 85.7, direccion)
+	d.texto(pf.Direccion.X, pf.Direccion.Y, direccion)
 	d.tamano(10)
-	d.texto(120, 90, distrito)
+	d.texto(pf.Localidad.X, pf.Localidad.Y, distrito)
 	if tit != nil {
-		d.texto(141, 94.5, tit.Categoria.String)
+		d.texto(pf.Categoria.X, pf.Categoria.Y, tit.Categoria.String)
 	}
 
-	d.texto(115, 104.5, medidor)
-	d.texto(135, 108.5, fechaUltimaLectura)
-	d.texto(126, 113, ultimaLectura)
-	d.texto(133, 117, fechaLecturaActual)
-	d.texto(124, 121.5, lecturaActual)
+	d.texto(pf.Medidor.X, pf.Medidor.Y, medidor)
+	d.texto(pf.FechaLecturaAnterior.X, pf.FechaLecturaAnterior.Y, fechaUltimaLectura)
+	d.texto(pf.LecturaAnterior.X, pf.LecturaAnterior.Y, ultimaLectura)
+	d.texto(pf.FechaUltimaLectura.X, pf.FechaUltimaLectura.Y, fechaLecturaActual)
+	d.texto(pf.UltimaLectura.X, pf.UltimaLectura.Y, lecturaActual)
 	if m.MedicionsID.Valid {
-		d.texto(137, 125.5, entero(med, func(x *medicion) sql.NullInt64 { return x.Consumo })+" m³")
+		d.texto(pf.ConsumoMensual.X, pf.ConsumoMensual.Y, entero(med, func(x *medicion) sql.NullInt64 { return x.Consumo })+" m³")
 	} else {
-		d.texto(137, 125.5, entero0(m.Consumo)+" m³")
+		d.texto(pf.ConsumoMensual.X, pf.ConsumoMensual.Y, entero0(m.Consumo)+" m³")
 	}
-	d.texto(158, 134, precioM3)
+	d.texto(pf.ValorM3.X, pf.ValorM3.Y, precioM3)
 
 	num := numFactura(m)
-	d.texto(122, 146, num)
-	d.texto(129, 151, fecha(m.CreatedAt, "02/01/2006"))
+	d.texto(pf.NumFactura.X, pf.NumFactura.Y, num)
+	d.texto(pf.FechaEmision.X, pf.FechaEmision.Y, fecha(m.CreatedAt, "02/01/2006"))
 
 	if m.PlanspagosID.Valid {
-		d.texto(115, 156, m.Movimiento.String)
+		d.texto(pf.Periodo.X, pf.Periodo.Y, m.Movimiento.String)
 	} else if m.PeriodoMes.Int64 != 0 && m.PeriodoAnio.Int64 != 0 {
-		d.texto(115, 156, fmt.Sprintf("%d / %d", m.PeriodoMes.Int64, m.PeriodoAnio.Int64))
+		d.texto(pf.Periodo.X, pf.Periodo.Y, fmt.Sprintf("%d / %d", m.PeriodoMes.Int64, m.PeriodoAnio.Int64))
 	}
 
-	y := 166.0
+	y := pf.ConceptosY
 	linea := func(x float64, s string) {
 		d.texto(x, y, s)
 		y += 4

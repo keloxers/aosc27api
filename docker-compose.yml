@@ -1,15 +1,14 @@
-# Despliegue junto a aosc_front en el mismo servidor. Ajustar la red para que
-# el contenedor llegue a la base `aosc` (DB_HOST) y al proxy que publica
-# aosc.gob.ar.
+# Desarrollo local: una instancia contra una base local o un túnel. Producción: deploy/docker-compose.yml.
 services:
   aosc-api:
     build: .
     image: aosc-api:latest
     restart: unless-stopped
     env_file: .env
+    environment: {FCM_CREDENTIALS: /secrets/firebase-credentials.json}
     volumes:
-      # Cuenta de servicio de Firebase (la misma que usa aosc_front).
-      - ./firebase-credentials.json:/secrets/firebase-credentials.json:ro
+      # Directorio con la cuenta de servicio de Firebase (firebase-credentials.json).
+      - ./secrets:/secrets:ro
     healthcheck:
       test: ["CMD", "/aosc-api", "healthcheck"]
       interval: 30s
@@ -17,11 +16,3 @@ services:
       retries: 3
     ports:
       - "127.0.0.1:8090:8080"
-    # Con Traefik, en lugar de `ports`, rutear /api/v1 de aosc.gob.ar a este
-    # servicio (la app no necesita cambiar su base URL):
-    # labels:
-    #   - traefik.enable=true
-    #   - traefik.http.routers.aosc-api.rule=Host(`aosc.gob.ar`) && PathPrefix(`/api/v1`)
-    #   - traefik.http.routers.aosc-api.entrypoints=websecure
-    #   - traefik.http.routers.aosc-api.tls.certresolver=letsencrypt
-    #   - traefik.http.services.aosc-api.loadbalancer.server.port=8080

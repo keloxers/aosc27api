@@ -1,6 +1,6 @@
 module aosc_api
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/go-pdf/fpdf v0.9.0

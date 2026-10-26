@@ -37,7 +37,7 @@ func TestGenerar(t *testing.T) {
 	if err != nil || m == nil {
 		t.Fatalf("movimiento %d: %v", id, err)
 	}
-	g := NuevoGenerador(conexion, wee.NuevoCobros(conexion, false), cfg.ArchivosURL)
+	g := NuevoGenerador(conexion, wee.NuevoCobros(conexion, false, cfg.Instancia.WeeDescripcion), cfg.ArchivosURL, cfg.Instancia)
 	b, err := g.Generar(ctx, m)
 	if err != nil {
 		t.Fatal(err)

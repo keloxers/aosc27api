@@ -1,4 +1,8 @@
 .env
+.env.*
+!.env.example
 /aosc-api
 firebase-credentials.json
+secrets/
+deploy/secrets/
 referencia*.json

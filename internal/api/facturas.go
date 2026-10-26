@@ -370,6 +370,12 @@ func (s *Servidor) dispositivosStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Instancia sin push: se acepta sin guardar para que la app no falle.
+	if !s.perfil.Push {
+		mensaje(w, http.StatusOK, "Dispositivo registrado.")
+		return
+	}
+
 	// Un token pertenece a un solo teléfono: si otro usuario inicia sesión
 	// en ese teléfono, el token pasa a él.
 	ahora := db.Ahora()
@@ -398,6 +404,10 @@ func (s *Servidor) dispositivosDestroy(w http.ResponseWriter, r *http.Request) {
 		errs.agregar("token", "El campo token debe ser una cadena de caracteres.")
 	}
 	if errs.responder(w) {
+		return
+	}
+	if !s.perfil.Push {
+		mensaje(w, http.StatusOK, "Dispositivo eliminado.")
 		return
 	}
 	if _, err := s.db.ExecContext(r.Context(), "DELETE FROM dispositivos WHERE token = ? AND users_id = ?",

@@ -93,6 +93,9 @@ func ejecutar() error {
 		return nil
 
 	case "notificaciones":
+		if !cfg.Instancia.Push {
+			return fmt.Errorf("la instancia %s no tiene notificaciones push", cfg.Instancia.Nombre)
+		}
 		fs := flag.NewFlagSet("notificaciones", flag.ExitOnError)
 		simular := fs.Bool("simular", false, "mostrar lo que se enviaría sin enviar ni registrar nada")
 		regla := fs.Int64("regla", 0, "procesar solo esta regla, sin importar su hora")
@@ -119,14 +122,16 @@ func ejecutar() error {
 }
 
 func servir(cfg *config.Config, conexion *sql.DB, authSrv *auth.Servicio) error {
+	slog.Info("instancia", "nombre", cfg.Instancia.Nombre, "push", cfg.Instancia.Push)
+
 	// La tabla de revocados es necesaria para validar tokens.
 	if _, err := conexion.Exec(auth.MigracionRevocados); err != nil {
 		slog.Warn("no se pudo crear app_tokens_revocados (correr `aosc-api migrar` con un usuario con permisos)", "error", err)
 	}
 
-	cobros := wee.NuevoCobros(conexion, cfg.WeeHabilitado)
+	cobros := wee.NuevoCobros(conexion, cfg.WeeHabilitado, cfg.Instancia.WeeDescripcion)
 	srv := api.NuevoServidor(conexion, authSrv, mail.NuevoMailer(cfg), cobros,
-		pdf.NuevoGenerador(conexion, cobros, cfg.ArchivosURL))
+		pdf.NuevoGenerador(conexion, cobros, cfg.ArchivosURL, cfg.Instancia), cfg.Instancia)
 
 	ctx, cancelar := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancelar()

@@ -17,13 +17,14 @@ type ErrCheckout struct{ Mensaje string }
 func (e *ErrCheckout) Error() string { return e.Mensaje }
 
 type Cobros struct {
-	db         *sql.DB
-	cliente    *Cliente
-	habilitado bool
+	db          *sql.DB
+	cliente     *Cliente
+	habilitado  bool
+	descripcion string
 }
 
-func NuevoCobros(db *sql.DB, habilitado bool) *Cobros {
-	return &Cobros{db: db, cliente: NuevoCliente(), habilitado: habilitado}
+func NuevoCobros(db *sql.DB, habilitado bool, descripcion string) *Cobros {
+	return &Cobros{db: db, cliente: NuevoCliente(), habilitado: habilitado, descripcion: descripcion}
 }
 
 type ResultadoCheckout struct {
@@ -197,7 +198,7 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 
 	uuid, checkoutURL, err := c.cliente.Checkout(ctx, endpoint.Texto.String, apikey, Pedido{
 		PayerName:         pagador.Nombre,
-		Description:       "Dist. de agua potable y cloaca",
+		Description:       c.descripcion,
 		FirstTotal:        total,
 		FirstDueDate:      calc.Ahora.Format("02-01-2006"),
 		ExternalReference: ref,
@@ -343,7 +344,7 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 
 	uuid, urlQR, checkoutURL, err := c.cliente.QRFactura(ctx, endpoint.Texto.String, apikey, Pedido{
 		PayerName:         titular.Nombre,
-		Description:       "Dist. de agua potable y cloaca",
+		Description:       c.descripcion,
 		FirstTotal:        total,
 		FirstDueDate:      m.Fecha1erVencimiento.Time.Format("02-01-2006"),
 		ExternalReference: ref,

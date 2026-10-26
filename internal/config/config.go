@@ -9,9 +9,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"aosc_api/internal/instancia"
 )
 
 type Config struct {
+	// Instancia (aosc | covesa): valores propios de cada una.
+	Instancia *instancia.Perfil
+
 	HTTPAddr string
 
 	DBHost     string
@@ -53,7 +58,13 @@ func Cargar() (*Config, error) {
 		return nil, err
 	}
 
+	perfil, err := instancia.Obtener(env("INSTANCIA", "aosc"))
+	if err != nil {
+		return nil, err
+	}
+
 	c := &Config{
+		Instancia:                 perfil,
 		HTTPAddr:                  env("HTTP_ADDR", ":8080"),
 		DBHost:                    env("DB_HOST", "127.0.0.1"),
 		DBPort:                    env("DB_PORT", "3306"),
@@ -67,7 +78,7 @@ func Cargar() (*Config, error) {
 		MailPassword:              env("MAIL_PASSWORD", ""),
 		MailEncryption:            strings.ToLower(env("MAIL_ENCRYPTION", "tls")),
 		MailFrom:                  env("MAIL_FROM_ADDRESS", ""),
-		MailFromName:              env("MAIL_FROM_NAME", "AOSC"),
+		MailFromName:              env("MAIL_FROM_NAME", perfil.Nombre),
 		ValidarCorreoURL:          strings.TrimRight(env("VALIDAR_CORREO_URL", "https://aosc.gob.ar/validacion"), "/"),
 		ArchivosURL:               strings.TrimRight(env("ARCHIVOS_URL", ""), "/"),
 		WeeHabilitado:             envBool("WEE_HABILITADO", true),
@@ -78,6 +89,10 @@ func Cargar() (*Config, error) {
 	// Laravel usa "null" para "sin cifrado".
 	if c.MailEncryption == "null" {
 		c.MailEncryption = ""
+	}
+
+	if c.NotificacionesHabilitadas && !perfil.Push {
+		return nil, fmt.Errorf("NOTIFICACIONES_HABILITADAS=true no es válido para la instancia %s: su base no tiene tablas de push", perfil.Nombre)
 	}
 
 	if len(c.JWTSecret) < 32 {
