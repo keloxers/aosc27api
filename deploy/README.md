@@ -4,7 +4,7 @@
 ~/apps/go/aosc27api/                  clone de keloxers/aosc27api
   deploy/.env.aosc                    config AOSC   (600, fuera de git)
   deploy/.env.covesa                  config COVESA (600, fuera de git)
-  deploy/secrets/aosc/firebase-credentials.json   cuenta de servicio FCM (600, fuera de git)
+  deploy/secrets/aosc/firebase-credentials.json   cuenta de servicio FCM (400, dueño 65532 = nonroot del contenedor)
 ```
 
 ```bash
