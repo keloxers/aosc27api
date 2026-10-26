@@ -246,8 +246,10 @@ func (c *Cobros) resolverMovimientos(ctx context.Context, userID int64, ids []in
 		}
 		vistos[id] = true
 
+		// Pagado = importe_pagado > 0 (con descuento queda por debajo de importe_apagar y se
+		// volvía a cobrar).
 		lista, err := facturacion.ListarMovimientos(ctx, c.db,
-			"id = ? AND (importe_pagado < importe_apagar OR importe_pagado IS NULL)", id)
+			"id = ? AND (importe_pagado <= 0 OR importe_pagado IS NULL)", id)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -315,6 +317,10 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 		return "", "", false
 	}
 	if titular == nil || inm == nil || !c.habilitado {
+		return "", "", false
+	}
+	// Sin QR para facturas ya pagadas: se podían volver a pagar desde el PDF.
+	if m.ImportePagado.Valid && m.ImportePagado.Float64 > 0 {
 		return "", "", false
 	}
 
