@@ -1,0 +1,5 @@
+.git
+.env
+*.json
+!go.sum
+herramientas

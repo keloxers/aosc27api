@@ -1,0 +1,4 @@
+.env
+/aosc-api
+firebase-credentials.json
+referencia*.json
