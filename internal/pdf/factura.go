@@ -442,7 +442,7 @@ func (g *Generador) Generar(ctx context.Context, m *facturacion.Movimiento) ([]b
 			slog.Warn("no se pudo dibujar el QR de pago", "movimientos_id", m.ID, "error", err)
 		} else {
 			d.negrita(7)
-			d.texto(87.5, 254.5, "QR valido hasta el "+fechaOEpoch(m.Fecha1erVencimiento))
+			d.texto(87.5, 254.5, "Pagá con QR")
 			d.texto(60, 292.5, checkoutURL)
 		}
 	}

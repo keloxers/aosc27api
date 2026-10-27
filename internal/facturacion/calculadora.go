@@ -428,6 +428,11 @@ func igualesPHP(a, b sql.NullFloat64) bool {
 // montoBase: lo pagado si la factura ya se cobró (en ese caso `cobrado` es
 // true y el importe es definitivo), o el importe sin IVA si no.
 func (c *Calculadora) montoBase(m *Movimiento) (monto float64, cobrado bool, err error) {
+	return c.montoBaseMora(m, true)
+}
+
+// montoBaseMora es montoBase con la mora opcional (conMora=false: intereses 0).
+func (c *Calculadora) montoBaseMora(m *Movimiento, conMora bool) (monto float64, cobrado bool, err error) {
 	if igualesPHP(m.ImporteApagar, m.ImportePagado) {
 		return m.ImportePagado.Float64, true, nil
 	}
@@ -440,9 +445,11 @@ func (c *Calculadora) montoBase(m *Movimiento) (monto float64, cobrado bool, err
 		return d.ImportePagado, true, nil
 	}
 
-	intereses, err := c.Intereses(m)
-	if err != nil {
-		return 0, false, err
+	intereses := 0.0
+	if conMora {
+		if intereses, err = c.Intereses(m); err != nil {
+			return 0, false, err
+		}
 	}
 	recargos, _, err := c.Recargos(m)
 	if err != nil {
@@ -505,7 +512,11 @@ func (c *Calculadora) PorcentajeIva(inm *Inmueble) (float64, error) {
 
 // ImporteIva (Movimiento::importeIva()).
 func (c *Calculadora) ImporteIva(m *Movimiento) (float64, error) {
-	total, _, err := c.montoBase(m)
+	return c.importeIvaMora(m, true)
+}
+
+func (c *Calculadora) importeIvaMora(m *Movimiento, conMora bool) (float64, error) {
+	total, _, err := c.montoBaseMora(m, conMora)
 	if err != nil {
 		return 0, err
 	}
@@ -522,11 +533,21 @@ func (c *Calculadora) ImporteIva(m *Movimiento) (float64, error) {
 
 // ImporteFinal: lo que hay que pagar hoy (Movimiento::importeFinal()).
 func (c *Calculadora) ImporteFinal(m *Movimiento) (float64, error) {
-	base, cobrado, err := c.montoBase(m)
+	return c.importeFinalMora(m, true)
+}
+
+// ImporteSinMora: ImporteFinal como si Intereses fuera 0 (IVA coherente). Es el
+// importe del QR de la factura, que no cambia con los días de atraso.
+func (c *Calculadora) ImporteSinMora(m *Movimiento) (float64, error) {
+	return c.importeFinalMora(m, false)
+}
+
+func (c *Calculadora) importeFinalMora(m *Movimiento, conMora bool) (float64, error) {
+	base, cobrado, err := c.montoBaseMora(m, conMora)
 	if err != nil || cobrado {
 		return base, err
 	}
-	iva, err := c.ImporteIva(m)
+	iva, err := c.importeIvaMora(m, conMora)
 	if err != nil {
 		return 0, err
 	}

@@ -64,21 +64,24 @@ func (c *Cliente) Checkout(ctx context.Context, endpoint, apikey string, p Pedid
 }
 
 // QRFactura crea el QR de pago de una factura (el body es una lista).
-func (c *Cliente) QRFactura(ctx context.Context, endpoint, apikey string, p Pedido) (uuid, urlQR, checkoutURL string, err error) {
+func (c *Cliente) QRFactura(ctx context.Context, endpoint, apikey string, p Pedido) (uuid, urlQR, checkoutURL string, pagoID int64, err error) {
 	var r struct {
 		Data []struct {
-			UUID        string `json:"uuid"`
-			URLQR       string `json:"url_qr"`
-			CheckoutURL string `json:"checkout_url"`
+			ID          json.Number `json:"id"`
+			UUID        string      `json:"uuid"`
+			URLQR       string      `json:"url_qr"`
+			CheckoutURL string      `json:"checkout_url"`
 		} `json:"data"`
 	}
 	if err := c.post(ctx, endpoint+"/checkout/qr-factura", apikey, []Pedido{p}, &r); err != nil {
-		return "", "", "", err
+		return "", "", "", 0, err
 	}
 	if len(r.Data) == 0 || r.Data[0].UUID == "" || r.Data[0].URLQR == "" || r.Data[0].CheckoutURL == "" {
-		return "", "", "", fmt.Errorf("respuesta de Wee sin uuid/url_qr/checkout_url")
+		return "", "", "", 0, fmt.Errorf("respuesta de Wee sin uuid/url_qr/checkout_url")
 	}
-	return r.Data[0].UUID, r.Data[0].URLQR, r.Data[0].CheckoutURL, nil
+	// El id es lo que pide la baja del QR; si falta queda en 0 (se guarda NULL).
+	pagoID, _ = r.Data[0].ID.Int64()
+	return r.Data[0].UUID, r.Data[0].URLQR, r.Data[0].CheckoutURL, pagoID, nil
 }
 
 func (c *Cliente) post(ctx context.Context, url, apikey string, cuerpo, destino any) error {

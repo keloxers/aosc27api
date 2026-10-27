@@ -432,14 +432,11 @@ func (c *Cobros) crearCajasrecibo(ctx context.Context, ex ejecutor, userID, user
 }
 
 // QR de pago de una factura para el PDF (WeeController::WeeQr). Devuelve
-// ok=false si el QR está deshabilitado, la factura venció o Wee falló.
+// ok=false si el QR está deshabilitado, la factura ya está pagada o Wee falló.
+// El QR no vence: va por el importe sin mora, también pasado el vencimiento.
 func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *facturacion.Movimiento, inm *facturacion.Inmueble, titular *Pagador) (urlQR, checkoutURL string, ok bool) {
 	cfg, err := c.configuracion(ctx, "wee_qr")
 	if err != nil || cfg == nil || cfg.Estado.Int64 == 0 {
-		return "", "", false
-	}
-	// strtotime(d-m-Y) < time(): el QR deja de emitirse el mismo día del vencimiento.
-	if !m.Fecha1erVencimiento.Valid || m.Fecha1erVencimiento.Time.Before(calc.Ahora) {
 		return "", "", false
 	}
 	if titular == nil || inm == nil || !c.habilitado {
@@ -455,7 +452,7 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 		return "", "", false
 	}
 
-	final, err := calc.ImporteFinal(m)
+	final, err := calc.ImporteSinMora(m)
 	if err != nil {
 		return falla(err)
 	}
@@ -504,11 +501,11 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 	// El PDF espera esta llamada: timeout corto.
 	ctxQ, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	uuid, urlQR, checkoutURL, err := c.cliente.QRFactura(ctxQ, endpoint.Texto.String, apikey, Pedido{
+	uuid, urlQR, checkoutURL, pagoID, err := c.cliente.QRFactura(ctxQ, endpoint.Texto.String, apikey, Pedido{
 		PayerName:         titular.Nombre,
 		Description:       c.descripcion,
 		FirstTotal:        total,
-		FirstDueDate:      m.Fecha1erVencimiento.Time.Format("02-01-2006"),
+		FirstDueDate:      primerVencimientoQR(m, calc.Ahora),
 		ExternalReference: ref,
 		PayerEmail:        titular.Email,
 		PaymentType:       paymentType,
@@ -524,11 +521,15 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 	}
 
 	ahora := time.Now().UTC().Format("2006-01-02 15:04:05")
+	var pagoIDSQL any
+	if pagoID > 0 {
+		pagoIDSQL = pagoID
+	}
 	if _, err := c.db.ExecContext(ctx, `
 		INSERT INTO payment_intent (payment_id, external_id, cajasrecibos_id, movimientos_id, estado, transaccion,
-			importe_pagado, checkout_url, created_at, updated_at)
-		VALUES (?, ?, NULL, ?, 'qr', 'pendiente', ?, ?, ?, ?)`,
-		uuid, ref, m.ID, fmt.Sprint(total), urlQR, ahora, ahora); err != nil {
+			importe_pagado, checkout_url, wee_pago_id, created_at, updated_at)
+		VALUES (?, ?, NULL, ?, 'qr', 'pendiente', ?, ?, ?, ?, ?)`,
+		uuid, ref, m.ID, fmt.Sprint(total), urlQR, pagoIDSQL, ahora, ahora); err != nil {
 		return falla(err)
 	}
 	if _, err := c.db.ExecContext(ctx, "UPDATE movimientos SET qr_pago = ?, qr_checkout = ?, updated_at = ? WHERE id = ?",
@@ -536,6 +537,15 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 		return falla(err)
 	}
 	return urlQR, checkoutURL, true
+}
+
+// primerVencimientoQR: 1er vencimiento (DD-MM-AAAA) si es hoy o futuro, si no hoy.
+func primerVencimientoQR(m *facturacion.Movimiento, ahora time.Time) string {
+	hoy := ahora.Format("2006-01-02")
+	if m.Fecha1erVencimiento.Valid && m.Fecha1erVencimiento.Time.Format("2006-01-02") >= hoy {
+		return m.Fecha1erVencimiento.Time.Format("02-01-2006")
+	}
+	return ahora.Format("02-01-2006")
 }
 
 // Resultado resume estado/transaccion de un payment_intent para la app:
