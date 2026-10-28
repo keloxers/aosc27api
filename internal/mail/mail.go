@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"aosc_api/internal/config"
+	bd "aosc_api/internal/db"
 )
 
 type Mailer struct {
@@ -60,7 +61,7 @@ func (m *Mailer) Enviar(para, asunto, cuerpoHTML string) error {
 	msg.WriteString("From: " + mime.QEncoding.Encode("utf-8", m.cfg.MailFromName) + " <" + from + ">\r\n")
 	msg.WriteString("To: " + para + "\r\n")
 	msg.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", asunto) + "\r\n")
-	msg.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
+	msg.WriteString("Date: " + time.Now().In(bd.Zona).Format(time.RFC1123Z) + "\r\n")
 	msg.WriteString("MIME-Version: 1.0\r\n")
 	msg.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
 	msg.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")

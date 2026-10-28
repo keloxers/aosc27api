@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	bd "aosc_api/internal/db"
 	"aosc_api/internal/facturacion"
 )
 
@@ -86,7 +87,7 @@ func (c *Cobros) externalReferenceUnico(ctx context.Context, ex ejecutor) (strin
 }
 
 func (c *Cobros) log(ctx context.Context, userID int64, texto string) {
-	ahora := time.Now().UTC().Format("2006-01-02 15:04:05")
+	ahora := bd.Ahora()
 	if _, err := c.db.ExecContext(ctx, "INSERT INTO logs (users_id, log, created_at, updated_at) VALUES (?, ?, ?, ?)",
 		userID, texto, ahora, ahora); err != nil {
 		slog.Error("no se pudo registrar el log", "error", err)
@@ -219,7 +220,7 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 		Items:             items,
 	})
 	if err != nil {
-		ahoraW := time.Now().UTC().Format("2006-01-02 15:04:05")
+		ahoraW := bd.Ahora()
 		if _, e := c.db.ExecContext(ctxW, "UPDATE cajasrecibos SET estado = 'anulada', updated_at = ? WHERE id = ?",
 			ahoraW, reciboID); e != nil {
 			slog.Error("no se pudo anular el recibo", "cajasrecibos_id", reciboID, "error", e)
@@ -233,7 +234,7 @@ func (c *Cobros) CrearCheckout(ctx context.Context, pagador Pagador, movimientoI
 	}
 
 	if _, err := c.db.ExecContext(ctxW, "UPDATE payment_intent SET payment_id = ?, checkout_url = ?, updated_at = ? WHERE external_id = ?",
-		uuid, checkoutURL, time.Now().UTC().Format("2006-01-02 15:04:05"), ref); err != nil {
+		uuid, checkoutURL, bd.Ahora(), ref); err != nil {
 		// Wee ya creó el checkout: se devuelve igual (el webhook encuentra el
 		// pago por external_id). Nunca se loguea la apikey.
 		slog.Error("no se pudo guardar el checkout de Wee", "external_id", ref, "uuid", uuid,
@@ -520,7 +521,7 @@ func (c *Cobros) QR(ctx context.Context, calc *facturacion.Calculadora, m *factu
 		return falla(err)
 	}
 
-	ahora := time.Now().UTC().Format("2006-01-02 15:04:05")
+	ahora := bd.Ahora()
 	var pagoIDSQL any
 	if pagoID > 0 {
 		pagoIDSQL = pagoID

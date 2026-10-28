@@ -25,7 +25,7 @@ services:
     build: {context: ..}
     container_name: aosc-api-aosc
     env_file: ./.env.aosc
-    environment: {HTTP_ADDR: ":8080", INSTANCIA: aosc, FCM_CREDENTIALS: /secrets/firebase-credentials.json}
+    environment: {TZ: America/Argentina/Buenos_Aires, HTTP_ADDR: ":8080", INSTANCIA: aosc, FCM_CREDENTIALS: /secrets/firebase-credentials.json}
     volumes: [./secrets/aosc:/secrets:ro]
     ports: ["${BIND_IP:?definir BIND_IP}:6880:8080"]
 
@@ -34,6 +34,6 @@ services:
     container_name: aosc-api-covesa
     env_file: ./.env.covesa
     # Sin push: la base covesa no tiene dispositivos/notificaciones_* (ver internal/instancia).
-    environment: {HTTP_ADDR: ":8080", INSTANCIA: covesa, NOTIFICACIONES_HABILITADAS: "false"}
+    environment: {TZ: America/Argentina/Buenos_Aires, HTTP_ADDR: ":8080", INSTANCIA: covesa, NOTIFICACIONES_HABILITADAS: "false"}
     ports: ["${BIND_IP:?definir BIND_IP}:6881:8080"]
     depends_on: [aosc]   # la imagen la construye aosc

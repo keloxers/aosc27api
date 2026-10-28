@@ -5,7 +5,7 @@ services:
     image: aosc-api:latest
     restart: unless-stopped
     env_file: .env
-    environment: {FCM_CREDENTIALS: /secrets/firebase-credentials.json}
+    environment: {TZ: America/Argentina/Buenos_Aires, FCM_CREDENTIALS: /secrets/firebase-credentials.json}
     volumes:
       # Directorio con la cuenta de servicio de Firebase (firebase-credentials.json).
       - ./secrets:/secrets:ro

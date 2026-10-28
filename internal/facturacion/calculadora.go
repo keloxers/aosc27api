@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	bd "aosc_api/internal/db"
 )
 
 // Calculadora evalúa los importes de los movimientos con un "ahora" fijo y
@@ -16,7 +18,7 @@ import (
 type Calculadora struct {
 	db    *sql.DB
 	ctx   context.Context
-	Ahora time.Time // UTC, como Carbon::now() en Laravel
+	Ahora time.Time // hora de Argentina, como Carbon::now() en Laravel
 
 	inmuebles   map[int64]*Inmueble
 	descuentos  map[int64][]descuentoInmueble
@@ -33,7 +35,7 @@ func NuevaCalculadora(ctx context.Context, db *sql.DB) *Calculadora {
 	return &Calculadora{
 		db:         db,
 		ctx:        ctx,
-		Ahora:      time.Now().UTC(),
+		Ahora:      bd.AhoraAR(),
 		inmuebles:  map[int64]*Inmueble{},
 		descuentos: map[int64][]descuentoInmueble{},
 		exentos:    map[int64]bool{},
@@ -76,7 +78,7 @@ func (c *Calculadora) Hoy() string {
 
 func (c *Calculadora) inicioDelDia() time.Time {
 	y, mo, d := c.Ahora.Date()
-	return time.Date(y, mo, d, 0, 0, 0, 0, time.UTC)
+	return time.Date(y, mo, d, 0, 0, 0, 0, bd.Zona)
 }
 
 // Inmueble del movimiento (cacheado). Nil si el movimiento no tiene.
@@ -566,7 +568,7 @@ func (c *Calculadora) DiasParaVencer(m *Movimiento) (dias int, ok bool) {
 		return 0, false
 	}
 	v := m.Fecha1erVencimiento.Time
-	venc := time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, time.UTC)
+	venc := time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, bd.Zona)
 	return int(math.Round(venc.Sub(c.inicioDelDia()).Hours() / 24)), true
 }
 

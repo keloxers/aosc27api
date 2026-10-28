@@ -14,6 +14,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	bd "aosc_api/internal/db"
 )
 
 var ErrTokenInvalido = errors.New("token inválido")
@@ -115,13 +117,13 @@ func (s *Servicio) Validar(ctx context.Context, token string) (*Sesion, error) {
 func (s *Servicio) Revocar(ctx context.Context, sesion *Sesion) error {
 	_, err := s.db.ExecContext(ctx,
 		"INSERT IGNORE INTO app_tokens_revocados (jti, users_id, expira_en) VALUES (?, ?, ?)",
-		sesion.JTI, sesion.Usuario.ID, sesion.ExpiraEn.UTC().Format("2006-01-02 15:04:05"))
+		sesion.JTI, sesion.Usuario.ID, sesion.ExpiraEn.In(bd.Zona).Format("2006-01-02 15:04:05"))
 	return err
 }
 
 // LimpiarRevocados borra los tokens revocados que ya vencieron solos.
 func (s *Servicio) LimpiarRevocados(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM app_tokens_revocados WHERE expira_en < UTC_TIMESTAMP()")
+	_, err := s.db.ExecContext(ctx, "DELETE FROM app_tokens_revocados WHERE expira_en < ?", bd.Ahora())
 	return err
 }
 

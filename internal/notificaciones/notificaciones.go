@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	_ "time/tzdata" // la imagen Docker no trae zonas horarias
 
+	bd "aosc_api/internal/db"
 	"aosc_api/internal/facturacion"
 	"aosc_api/internal/fcm"
 )
@@ -27,13 +27,7 @@ const (
 	diaMes           = "dia_mes"
 )
 
-var zona = func() *time.Location {
-	loc, err := time.LoadLocation("America/Argentina/Buenos_Aires")
-	if err != nil {
-		return time.FixedZone("ART", -3*3600)
-	}
-	return loc
-}()
+var zona = bd.Zona
 
 type Enviador struct {
 	db  *sql.DB
@@ -223,7 +217,7 @@ func (e *Enviador) Ejecutar(ctx context.Context, o Opciones) (int, error) {
 				// Si no llegó a ningún teléfono no se registra, así se
 				// reintenta en la próxima corrida.
 				if ok > 0 {
-					ts := time.Now().UTC().Format("2006-01-02 15:04:05")
+					ts := bd.Ahora()
 					if _, err := e.db.ExecContext(ctx, `
 						INSERT INTO notificaciones_envios (notificaciones_reglas_id, users_id, inmuebles_id,
 							movimientos_id, fecha, dispositivos, created_at, updated_at)
@@ -283,7 +277,7 @@ func avisosDe(calc *facturacion.Calculadora, r regla, pendientes []*facturacion.
 			vencimiento := ""
 			if len(fechas) > 0 {
 				sort.Strings(fechas)
-				t, _ := time.Parse("2006-01-02", fechas[0])
+				t, _ := time.ParseInLocation("2006-01-02", fechas[0], zona)
 				vencimiento = t.Format("02/01/2006")
 			}
 			avisos = append(avisos, aviso{
