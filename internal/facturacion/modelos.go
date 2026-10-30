@@ -48,7 +48,7 @@ const columnasMovimiento = `id, users_id, fecha_1ervencimiento, fecha_2dovencimi
 
 // CondicionPendiente es el criterio de factura impaga usado en toda la app
 // (scopePendientes): importe_pagado <= 0 o null, e importe_apagar > 0.
-const CondicionPendiente = `(importe_pagado <= 0 OR importe_pagado IS NULL) AND importe_apagar > 0`
+const CondicionPendiente = `(importe_pagado <= 0 OR importe_pagado IS NULL) AND importe_apagar > 0 AND anulado_at IS NULL`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -65,9 +65,9 @@ func scanMovimiento(s scanner) (*Movimiento, error) {
 	return m, err
 }
 
-// BuscarMovimiento devuelve nil si no existe.
+// BuscarMovimiento devuelve nil si no existe o está anulado.
 func BuscarMovimiento(ctx context.Context, db *sql.DB, id int64) (*Movimiento, error) {
-	m, err := scanMovimiento(db.QueryRowContext(ctx, "SELECT "+columnasMovimiento+" FROM movimientos WHERE id = ?", id))
+	m, err := scanMovimiento(db.QueryRowContext(ctx, "SELECT "+columnasMovimiento+" FROM movimientos WHERE id = ? AND anulado_at IS NULL", id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
